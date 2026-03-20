@@ -1,17 +1,241 @@
 # -*- coding: utf-8 -*-
 """
 环境检测与配置模块
-负责 OpenClaw 环境检测、依赖检查、配置生成
+负责 OpenClaw 环境检测、依赖检查、配置生成、环境管理
 """
 
 import os
 import sys
 import json
+import shutil
 import platform
 import subprocess
 from pathlib import Path
 from datetime import datetime
 
+
+# ============== 环境管理模块 ==============
+
+class EnvironmentManager:
+    """OpenClaw 环境管理器 - 支持多环境创建/切换"""
+    
+    def __init__(self):
+        self.openclaw_dir = Path.home() / '.openclaw'
+        self.environments_dir = self.openclaw_dir / 'environments'
+        self.state_file = self.openclaw_dir / 'env_state.json'
+        self.environments_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _get_env_dir(self, name: str) -> Path:
+        """获取环境目录"""
+        return self.environments_dir / name
+    
+    def _get_env_config(self, name: str) -> Path:
+        """获取环境配置文件路径"""
+        return self._get_env_dir(name) / 'config.json'
+    
+    def _load_state(self) -> dict:
+        """加载环境状态"""
+        if self.state_file.exists():
+            with open(self.state_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {'active': 'default', 'environments': {}}
+    
+    def _save_state(self, state: dict):
+        """保存环境状态"""
+        with open(self.state_file, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+    
+    def create(self, name: str, template: str = 'default') -> dict:
+        """创建新环境"""
+        # 验证环境名
+        if not name or not name.replace('_', '').replace('-', '').isalnum():
+            return {
+                'success': False,
+                'error': '环境名只能包含字母、数字、下划线和连字符'
+            }
+        
+        env_dir = self._get_env_dir(name)
+        
+        # 检查是否已存在
+        if env_dir.exists():
+            return {
+                'success': False,
+                'error': f'环境已存在：{name}'
+            }
+        
+        try:
+            # 创建环境目录
+            env_dir.mkdir(parents=True, exist_ok=True)
+            (env_dir / 'workspace').mkdir(exist_ok=True)
+            (env_dir / 'logs').mkdir(exist_ok=True)
+            (env_dir / 'sessions').mkdir(exist_ok=True)
+            (env_dir / 'agents').mkdir(exist_ok=True)
+            
+            # 生成配置文件
+            config = self._generate_env_config(name, template)
+            with open(self._get_env_config(name), 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            
+            # 复制 Agent 配置模板
+            self._copy_agent_template(name)
+            
+            # 更新状态
+            state = self._load_state()
+            state['environments'][name] = {
+                'created': datetime.now().isoformat(),
+                'template': template,
+                'workspace': str(env_dir / 'workspace')
+            }
+            self._save_state(state)
+            
+            return {
+                'success': True,
+                'path': str(env_dir),
+                'config': str(self._get_env_config(name))
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'创建失败：{str(e)}'
+            }
+    
+    def switch(self, name: str) -> dict:
+        """切换环境"""
+        env_dir = self._get_env_dir(name)
+        
+        # 验证环境存在
+        if not env_dir.exists():
+            return {
+                'success': False,
+                'error': f'环境不存在：{name}'
+            }
+        
+        # 验证配置文件
+        if not self._get_env_config(name).exists():
+            return {
+                'success': False,
+                'error': f'环境配置损坏：{name}'
+            }
+        
+        try:
+            # 更新状态
+            state = self._load_state()
+            old_active = state['active']
+            state['active'] = name
+            state['last_switch'] = datetime.now().isoformat()
+            self._save_state(state)
+            
+            return {
+                'success': True,
+                'from': old_active,
+                'to': name,
+                'path': str(env_dir)
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'切换失败：{str(e)}'
+            }
+    
+    def list_all(self) -> list:
+        """列出所有环境"""
+        state = self._load_state()
+        environments = []
+        
+        for name, info in state['environments'].items():
+            env_dir = self._get_env_dir(name)
+            environments.append({
+                'name': name,
+                'active': name == state['active'],
+                'created': info.get('created', 'N/A'),
+                'template': info.get('template', 'default'),
+                'path': str(env_dir),
+                'valid': env_dir.exists() and self._get_env_config(name).exists()
+            })
+        
+        # 添加 default 环境
+        if 'default' not in state['environments']:
+            environments.insert(0, {
+                'name': 'default',
+                'active': state['active'] == 'default',
+                'created': 'N/A',
+                'template': 'default',
+                'path': str(self.openclaw_dir),
+                'valid': True
+            })
+        
+        return environments
+    
+    def get_active(self) -> str:
+        """获取当前活跃环境"""
+        state = self._load_state()
+        return state.get('active', 'default')
+    
+    def _generate_env_config(self, name: str, template: str) -> dict:
+        """生成环境配置"""
+        env_dir = self._get_env_dir(name)
+        
+        return {
+            'version': '0.1.0',
+            'name': name,
+            'template': template,
+            'created_at': datetime.now().isoformat(),
+            'paths': {
+                'workspace': str(env_dir / 'workspace'),
+                'logs': str(env_dir / 'logs'),
+                'sessions': str(env_dir / 'sessions'),
+                'agents': str(env_dir / 'agents')
+            },
+            'process': {
+                'auto_restart': True,
+                'health_check_interval': 30,
+                'max_restarts': 3
+            },
+            'monitor': {
+                'cpu_threshold': 80,
+                'memory_threshold': 90,
+                'disk_threshold': 85,
+                'check_interval': 60
+            },
+            'logs': {
+                'level': 'INFO',
+                'max_size_mb': 100,
+                'retention_days': 30
+            },
+            'sessions': {
+                'default': 'default'
+            }
+        }
+    
+    def _copy_agent_template(self, name: str):
+        """复制 Agent 配置模板"""
+        agent_dir = self._get_env_dir(name) / 'agents'
+        
+        # 默认 Agent 配置
+        default_agents = {
+            'shangshu': {
+                'name': '尚书省',
+                'role': 'coordinator',
+                'enabled': True
+            },
+            'gongbu': {
+                'name': '工部',
+                'role': 'developer',
+                'enabled': True
+            },
+            'libu': {
+                'name': '吏部',
+                'role': 'hr',
+                'enabled': True
+            }
+        }
+        
+        config_file = agent_dir / 'agents.json'
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(default_agents, f, indent=2, ensure_ascii=False)
+
+
+# ============== 环境检测模块 ==============
 
 class EnvironmentChecker:
     """OpenClaw 环境检测器"""
