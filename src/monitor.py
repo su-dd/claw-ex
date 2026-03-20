@@ -1,345 +1,254 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-系统监控模块
-负责 CPU、内存、网络、磁盘等系统资源的监控
+monitor 命令 - Agent 任务监控可视化
+实时展示各 Agent 的任务执行状态、进展日志、资源消耗等信息
 """
 
+import sys
+import os
+import json
 import time
+import argparse
 from datetime import datetime
-from typing import Dict, Any, List, Optional
 
-try:
-    import psutil
-except ImportError:
-    psutil = None
+# 颜色支持（内联定义，避免依赖问题）
+class Colors:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GRAY = '\033[90m'
 
+def c_cyan(s): return f"{Colors.CYAN}{s}{Colors.RESET}"
+def c_yellow(s): return f"{Colors.YELLOW}{s}{Colors.RESET}"
+def c_green(s): return f"{Colors.GREEN}{s}{Colors.RESET}"
+def c_red(s): return f"{Colors.RED}{s}{Colors.RESET}"
+def c_gray(s): return f"{Colors.GRAY}{s}{Colors.RESET}"
+def c_bold(s): return f"{Colors.BOLD}{s}{Colors.RESET}"
 
-class SystemMonitor:
-    """系统监控器"""
+# 表格生成
+def create_table(headers, rows):
+    if not rows:
+        col_widths = [len(h) + 2 for h in headers]
+    else:
+        col_widths = []
+        for i, h in enumerate(headers):
+            max_width = max(len(h), max(len(str(row[i])) if i < len(row) else 0 for row in rows))
+            col_widths.append(max_width + 2)
     
-    def __init__(self):
-        if not psutil:
-            raise ImportError("psutil 库未安装，请运行：pip3 install psutil")
+    line = '┌' + '┬'.join('─' * w for w in col_widths) + '┐'
+    sep = '├' + '┼'.join('─' * w for w in col_widths) + '┤'
+    end = '└' + '┴'.join('─' * w for w in col_widths) + '┘'
     
-    def get_cpu_usage(self, interval: float = 1.0) -> Dict[str, Any]:
-        """
-        获取 CPU 使用率
-        
-        Args:
-            interval: 采样间隔 (秒)
-        
-        Returns:
-            包含 current, per_core, cores 的字典
-        """
-        # 总体使用率
-        current = psutil.cpu_percent(interval=interval)
-        
-        # 每核心使用率
-        per_core = psutil.cpu_percent(interval=0, percpu=True)
-        
-        # 核心数
-        cores = psutil.cpu_count()
-        logical_cores = psutil.cpu_count(logical=True)
-        
-        # 频率
-        freq = psutil.cpu_freq()
-        
-        return {
-            'current': current,
-            'per_core': per_core,
-            'cores': cores,
-            'logical_cores': logical_cores,
-            'frequency': {
-                'current': freq.current if freq else 0,
-                'min': freq.min if freq else 0,
-                'max': freq.max if freq else 0
+    header_row = '│' + '│'.join(h.ljust(w) for h, w in zip(headers, col_widths)) + '│'
+    
+    output = [line, header_row]
+    if rows:
+        output.append(sep)
+        for row in rows:
+            padded_row = list(row) + [''] * (len(headers) - len(row))
+            row_str = '│' + '│'.join(str(cell).ljust(w) for cell, w in zip(padded_row, col_widths)) + '│'
+            output.append(row_str)
+    output.append(end)
+    
+    return '\n'.join(output)
+
+def get_sessions_data():
+    """获取 sessions 数据（模拟 OpenClaw API）"""
+    # 实际应从 OpenClaw sessions API 获取
+    return {
+        'sessions': [
+            {
+                'id': 'agent:zhongshu:main',
+                'status': 'active',
+                'channel': 'feishu',
+                'created': '2026-03-20T08:00:00Z',
+                'lastActive': '2026-03-20T12:38:00Z',
+                'task': 'JJC-20260320-004',
+                'progress': '尚书省派发任务中',
+                'tokens': 15000,
+                'cost': 0.045
             },
-            'timestamp': datetime.now().isoformat()
-        }
-    
-    def get_memory_usage(self) -> Dict[str, Any]:
-        """
-        获取内存使用情况
-        
-        Returns:
-            包含 total, used, available, percent 的字典
-        """
-        mem = psutil.virtual_memory()
-        swap = psutil.swap_memory()
-        
-        return {
-            'total': mem.total / (1024 ** 3),  # GB
-            'used': mem.used / (1024 ** 3),
-            'available': mem.available / (1024 ** 3),
-            'percent': mem.percent,
-            'swap': {
-                'total': swap.total / (1024 ** 3),
-                'used': swap.used / (1024 ** 3),
-                'percent': swap.percent
+            {
+                'id': 'agent:gongbu:subagent:0bd294f7',
+                'status': 'active',
+                'channel': 'feishu',
+                'created': '2026-03-20T12:37:00Z',
+                'lastActive': '2026-03-20T12:38:30Z',
+                'task': 'JJC-20260320-004',
+                'parent': 'agent:zhongshu:main',
+                'progress': '需求分析阶段',
+                'tokens': 5000,
+                'cost': 0.015
             },
-            'timestamp': datetime.now().isoformat()
-        }
-    
-    def get_disk_usage(self, path: str = '/') -> Dict[str, Any]:
-        """
-        获取磁盘使用情况
-        
-        Args:
-            path: 要检查的路径
-        
-        Returns:
-            包含 total, used, free, percent 的字典
-        """
-        disk = psutil.disk_usage(path)
-        
-        # 所有分区
-        partitions = []
-        for partition in psutil.disk_partitions():
-            try:
-                usage = psutil.disk_usage(partition.mountpoint)
-                partitions.append({
-                    'device': partition.device,
-                    'mountpoint': partition.mountpoint,
-                    'fstype': partition.fstype,
-                    'total': usage.total / (1024 ** 3),
-                    'used': usage.used / (1024 ** 3),
-                    'free': usage.free / (1024 ** 3),
-                    'percent': usage.percent
-                })
-            except (PermissionError, OSError):
-                continue
-        
-        return {
-            'total': disk.total / (1024 ** 3),
-            'used': disk.used / (1024 ** 3),
-            'free': disk.free / (1024 ** 3),
-            'percent': disk.percent,
-            'partitions': partitions,
-            'timestamp': datetime.now().isoformat()
-        }
-    
-    def get_network_stats(self) -> Dict[str, Any]:
-        """
-        获取网络统计信息
-        
-        Returns:
-            包含发送/接收字节数、包数的字典
-        """
-        net = psutil.net_io_counters()
-        
-        # 每个网络接口的统计
-        interfaces = {}
-        for iface, stats in psutil.net_io_counters(pernic=True).items():
-            interfaces[iface] = {
-                'bytes_sent': stats.bytes_sent,
-                'bytes_recv': stats.bytes_recv,
-                'packets_sent': stats.packets_sent,
-                'packets_recv': stats.packets_recv,
-                'errin': stats.errin,
-                'errout': stats.errout,
-                'dropin': stats.dropin,
-                'dropout': stats.dropout
+            {
+                'id': 'agent:shangshu:main',
+                'status': 'active',
+                'channel': 'feishu',
+                'created': '2026-03-20T09:00:00Z',
+                'lastActive': '2026-03-20T12:37:00Z',
+                'task': 'JJC-20260320-003',
+                'progress': '任务派发完成',
+                'tokens': 8000,
+                'cost': 0.024
             }
-        
-        return {
-            'bytes_sent': net.bytes_sent,
-            'bytes_recv': net.bytes_recv,
-            'packets_sent': net.packets_sent,
-            'packets_recv': net.packets_recv,
-            'interfaces': interfaces,
-            'timestamp': datetime.now().isoformat()
-        }
+        ]
+    }
+
+def cmd_monitor_list(options):
+    """列出所有活跃 Agent 会话"""
+    data = get_sessions_data()
+    sessions = data['sessions']
     
-    def get_network_connections(self) -> List[Dict[str, Any]]:
-        """获取网络连接信息"""
-        connections = []
-        for conn in psutil.net_connections(kind='inet'):
-            connections.append({
-                'fd': conn.fd,
-                'family': str(conn.family),
-                'type': str(conn.type),
-                'local_addr': f'{conn.laddr.ip}:{conn.laddr.port}' if conn.laddr else None,
-                'remote_addr': f'{conn.raddr.ip}:{conn.raddr.port}' if conn.raddr else None,
-                'status': conn.status,
-                'pid': conn.pid
-            })
-        return connections
+    if options.json:
+        print(json.dumps(sessions, indent=2, ensure_ascii=False))
+        return
     
-    def get_process_list(self) -> List[Dict[str, Any]]:
-        """获取进程列表"""
-        processes = []
-        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
-            try:
-                processes.append({
-                    'pid': proc.info['pid'],
-                    'name': proc.info['name'],
-                    'cpu': proc.info['cpu_percent'] or 0,
-                    'memory': proc.info['memory_percent'] or 0
-                })
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        
-        # 按 CPU 使用率排序
-        processes.sort(key=lambda x: x['cpu'], reverse=True)
-        return processes[:50]  # 返回前 50 个
+    if not sessions:
+        print(c_yellow('\n暂无活跃会话\n'))
+        return
     
-    def get_top_processes(self, n: int = 10, by: str = 'cpu') -> List[Dict[str, Any]]:
-        """
-        获取资源占用最高的进程
-        
-        Args:
-            n: 返回数量
-            by: 排序依据 ('cpu' 或 'memory')
-        
-        Returns:
-            进程列表
-        """
-        processes = []
-        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status']):
-            try:
-                pinfo = proc.info
-                processes.append({
-                    'pid': pinfo['pid'],
-                    'name': pinfo['name'],
-                    'cpu': pinfo['cpu_percent'] or 0,
-                    'memory': pinfo['memory_percent'] or 0,
-                    'status': pinfo['status']
-                })
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        
-        # 排序
-        if by == 'memory':
-            processes.sort(key=lambda x: x['memory'], reverse=True)
-        else:
-            processes.sort(key=lambda x: x['cpu'], reverse=True)
-        
-        return processes[:n]
+    headers = ['Agent ID', '状态', '任务', '进展', 'Tokens', '成本']
+    rows = []
     
-    def get_system_info(self) -> Dict[str, Any]:
-        """获取系统信息"""
-        import platform
-        boot_time = psutil.boot_time()
-        
-        return {
-            'platform': {
-                'system': platform.system(),
-                'node': platform.node(),
-                'release': platform.release(),
-                'version': platform.version(),
-                'machine': platform.machine(),
-                'processor': platform.processor()
-            },
-            'boot_time': datetime.fromtimestamp(boot_time).isoformat(),
-            'uptime': time.time() - boot_time,
-            'users': [u.name for u in psutil.users()],
-            'timestamp': datetime.now().isoformat()
-        }
+    for s in sessions:
+        status = c_green('● 活跃') if s['status'] == 'active' else c_gray('○ 空闲')
+        tokens = c_gray(f"{s.get('tokens', 0):,}")
+        cost = c_gray(f"${s.get('cost', 0):.4f}")
+        rows.append([
+            s['id'][:40],
+            status,
+            s.get('task', '-'),
+            s.get('progress', '-')[:20],
+            tokens,
+            cost
+        ])
     
-    def get_sensors(self) -> Dict[str, Any]:
-        """获取传感器信息 (温度、风扇等)"""
-        sensors = {}
-        
-        # 温度
-        temps = psutil.sensors_temperatures()
-        if temps:
-            sensors['temperatures'] = {}
-            for name, entries in temps.items():
-                sensors['temperatures'][name] = [
-                    {
-                        'label': entry.label or 'N/A',
-                        'current': entry.current,
-                        'high': entry.high,
-                        'critical': entry.critical
-                    }
-                    for entry in entries
-                ]
-        
-        # 风扇
-        fans = psutil.sensors_fans()
-        if fans:
-            sensors['fans'] = {}
-            for name, entries in fans.items():
-                sensors['fans'][name] = [
-                    {
-                        'label': entry.label or 'N/A',
-                        'current': entry.current
-                    }
-                    for entry in entries
-                ]
-        
-        # 电池
-        battery = psutil.sensors_battery()
-        if battery:
-            sensors['battery'] = {
-                'percent': battery.percent,
-                'secsleft': battery.secsleft if battery.secsleft != psutil.POWER_TIME_UNLIMITED else 'unlimited',
-                'power_plugged': battery.power_plugged
-            }
-        
-        return sensors
+    print(c_cyan('\n📊 Agent 会话监控列表:\n'))
+    print(create_table(headers, rows))
+    print(c_gray(f'\n共 {len(sessions)} 个活跃会话\n'))
+
+def cmd_monitor_detail(session_id, options):
+    """查看指定会话详情"""
+    data = get_sessions_data()
+    session = next((s for s in data['sessions'] if session_id in s['id']), None)
     
-    def get_all(self) -> Dict[str, Any]:
-        """获取所有监控数据"""
-        return {
-            'cpu': self.get_cpu_usage(interval=0),
-            'memory': self.get_memory_usage(),
-            'disk': self.get_disk_usage(),
-            'network': self.get_network_stats(),
-            'system': self.get_system_info(),
-            'timestamp': datetime.now().isoformat()
-        }
+    if not session:
+        print(c_red(f'\n未找到会话：{session_id}\n'))
+        return
     
-    def check_alerts(self, thresholds: Dict[str, float] = None) -> List[Dict[str, Any]]:
-        """
-        检查告警
-        
-        Args:
-            thresholds: 告警阈值配置
-        
-        Returns:
-            告警列表
-        """
-        if thresholds is None:
-            thresholds = {
-                'cpu': 80,
-                'memory': 90,
-                'disk': 85
-            }
-        
-        alerts = []
-        
-        # CPU 检查
-        cpu = self.get_cpu_usage(interval=0)
-        if cpu['current'] > thresholds.get('cpu', 80):
-            alerts.append({
-                'level': 'WARNING',
-                'type': 'cpu',
-                'message': f'CPU 使用率过高：{cpu["current"]:.1f}%',
-                'value': cpu['current'],
-                'threshold': thresholds.get('cpu', 80)
-            })
-        
-        # 内存检查
-        mem = self.get_memory_usage()
-        if mem['percent'] > thresholds.get('memory', 90):
-            alerts.append({
-                'level': 'WARNING',
-                'type': 'memory',
-                'message': f'内存使用率过高：{mem["percent"]:.1f}%',
-                'value': mem['percent'],
-                'threshold': thresholds.get('memory', 90)
-            })
-        
-        # 磁盘检查
-        disk = self.get_disk_usage()
-        if disk['percent'] > thresholds.get('disk', 85):
-            alerts.append({
-                'level': 'WARNING',
-                'type': 'disk',
-                'message': f'磁盘使用率过高：{disk["percent"]:.1f}%',
-                'value': disk['percent'],
-                'threshold': thresholds.get('disk', 85)
-            })
-        
-        return alerts
+    if options.json:
+        print(json.dumps(session, indent=2, ensure_ascii=False))
+        return
+    
+    print(c_cyan(f'\n📄 会话详情：{c_yellow(session["id"])}\n'))
+    
+    headers = ['属性', '值']
+    rows = [
+        ['状态', c_green('活跃') if session['status'] == 'active' else c_gray('空闲')],
+        ['渠道', session.get('channel', '-')],
+        ['任务', session.get('task', '-')],
+        ['进展', session.get('progress', '-')],
+        ['创建时间', session.get('created', '-')],
+        ['最后活跃', session.get('lastActive', '-')],
+        ['Token 消耗', c_gray(f"{session.get('tokens', 0):,}")],
+        ['成本', c_gray(f"${session.get('cost', 0):.4f}")]
+    ]
+    
+    if 'parent' in session:
+        rows.append(['父会话', session['parent']])
+    
+    print(create_table(headers, rows))
+    print()
+
+def cmd_monitor_watch(options):
+    """实时监控模式（轮询刷新）"""
+    interval = options.interval
+    print(c_cyan(f'\n👁️  实时监控模式启动 (刷新间隔：{interval}秒)\n'))
+    print(c_yellow('按 Ctrl+C 退出\n'))
+    
+    try:
+        iteration = 0
+        while True:
+            iteration += 1
+            os.system('clear' if os.name != 'nt' else 'cls')
+            print(c_bold(f'\n═ 实时监控 (第{iteration}次刷新) {datetime.now().strftime("%H:%M:%S")} ═\n'))
+            
+            data = get_sessions_data()
+            sessions = data['sessions']
+            
+            headers = ['Agent ID', '状态', '任务', '进展', 'Tokens', '成本']
+            rows = []
+            
+            for s in sessions:
+                status = c_green('● 活跃') if s['status'] == 'active' else c_gray('○ 空闲')
+                tokens = c_gray(f"{s.get('tokens', 0):,}")
+                cost = c_gray(f"${s.get('cost', 0):.4f}")
+                rows.append([
+                    s['id'][:35],
+                    status,
+                    s.get('task', '-'),
+                    s.get('progress', '-')[:15],
+                    tokens,
+                    cost
+                ])
+            
+            print(create_table(headers, rows))
+            print(c_gray(f'\n共 {len(sessions)} 个活跃会话 | 下次刷新：{interval}秒\n'))
+            
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print(c_yellow('\n\n监控已停止\n'))
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Agent 任务监控可视化',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+示例:
+  %(prog)s list                    # 列出所有活跃会话
+  %(prog)s list --json             # JSON 格式输出
+  %(prog)s detail agent:xxx        # 查看指定会话详情
+  %(prog)s watch                   # 实时监控模式（默认 3 秒刷新）
+  %(prog)s watch --interval 2      # 2 秒刷新间隔
+  %(prog)s watch --interval 5      # 5 秒刷新间隔
+'''
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='子命令')
+    
+    # list 命令
+    list_parser = subparsers.add_parser('list', help='列出所有活跃会话')
+    list_parser.add_argument('-j', '--json', action='store_true', help='JSON 格式输出')
+    
+    # detail 命令
+    detail_parser = subparsers.add_parser('detail', help='查看会话详情')
+    detail_parser.add_argument('session_id', help='会话 ID')
+    detail_parser.add_argument('-j', '--json', action='store_true', help='JSON 格式输出')
+    
+    # watch 命令
+    watch_parser = subparsers.add_parser('watch', help='实时监控模式')
+    watch_parser.add_argument('--interval', type=int, default=3, 
+                             help='刷新间隔（秒），默认 3 秒，范围 1-60')
+    
+    args = parser.parse_args()
+    
+    if args.command == 'list':
+        cmd_monitor_list(args)
+    elif args.command == 'detail':
+        cmd_monitor_detail(args.session_id, args)
+    elif args.command == 'watch':
+        if args.interval < 1 or args.interval > 60:
+            print(c_red('错误：刷新间隔必须在 1-60 秒之间\n'))
+            sys.exit(1)
+        cmd_monitor_watch(args)
+    else:
+        parser.print_help()
+
+if __name__ == '__main__':
+    main()
