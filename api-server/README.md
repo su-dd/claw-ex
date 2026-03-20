@@ -88,6 +88,22 @@ docker-compose --profile production up -d
 |------|------|------|
 | GET | `/api/config/list` | 配置列表 |
 
+### 模板管理（新增）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/template/list` | 列出所有模板 |
+| GET | `/api/template/show/{id}` | 查看模板详情 |
+| POST | `/api/template/create` | 创建模板 |
+| POST | `/api/template/apply` | 应用模板 |
+| POST | `/api/template/export/{id}` | 导出模板 |
+| POST | `/api/template/import` | 导入模板 |
+| DELETE | `/api/template/delete/{id}` | 删除模板 |
+| GET | `/api/template/versions/{id}` | 获取版本历史 |
+| POST | `/api/template/rollback/{id}/{version}` | 回滚到指定版本 |
+
+**详细文档**: 参见 [TEMPLATE_API.md](./TEMPLATE_API.md)
+
 ### WebSocket
 
 | 路径 | 说明 |
