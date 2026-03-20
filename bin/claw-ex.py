@@ -280,6 +280,130 @@ def cmd_config_list():
     print(create_table(headers, rows))
     print()
 
+def cmd_config_validate(path=None, validate_all=False, strict=False, json_output=False):
+    """验证配置文件"""
+    # 添加兵部 workspace 到路径
+    BINGBU_PATH = os.path.join(os.path.expanduser('~'), '.openclaw', 'workspace-bingbu')
+    if BINGBU_PATH not in sys.path:
+        sys.path.insert(0, BINGBU_PATH)
+    
+    try:
+        from agent_config_validator import ConfigValidator
+        
+        validator = ConfigValidator()
+        
+        if validate_all:
+            # 验证所有 Agent 配置
+            result = validator.validate_all_agents()
+            
+            if json_output:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                print(c_cyan('\n🔍 Agent 配置验证报告\n'))
+                print(c_bold('=' * 60))
+                summary = result["summary"]
+                print(f"总数：{summary['total']}")
+                print(f"有效：{c_green(summary['valid'])}")
+                print(f"无效：{c_red(summary['invalid'])}")
+                print(f"通过率：{summary['pass_rate']}")
+                print(c_bold('=' * 60) + '\n')
+                
+                for agent_id, details in result["details"].items():
+                    status = c_green('✅') if details["valid"] else c_red('❌')
+                    print(f"{status} {c_yellow(agent_id)}")
+                    if details["errors"]:
+                        for error in details["errors"]:
+                            print(f"   {c_red('错误')}: {error}")
+                    if details["warnings"]:
+                        for warning in details["warnings"]:
+                            print(f"   {c_yellow('警告')}: {warning}")
+                print()
+            
+            sys.exit(0 if result["summary"]["invalid"] == 0 else 1)
+        
+        elif path:
+            from pathlib import Path as FilePath
+            p = FilePath(path)
+            
+            if p.is_file():
+                result = validator.validate_file(str(p))
+            elif p.is_dir():
+                results = validator.validate_directory(str(p))
+                result = {
+                    "directory": str(p),
+                    "files": results,
+                    "summary": {
+                        "total": len(results),
+                        "valid": sum(1 for r in results if r["valid"]),
+                        "invalid": sum(1 for r in results if not r["valid"]),
+                    }
+                }
+            else:
+                print(c_red(f'错误：路径不存在：{p}'))
+                sys.exit(1)
+            
+            if json_output:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                print(c_cyan(f'\n🔍 配置验证：{c_yellow(str(p))}\n'))
+                print(c_bold('=' * 60))
+                
+                if "files" in result:
+                    for file_result in result["files"]:
+                        status = c_green('✅') if file_result["valid"] else c_red('❌')
+                        print(f"{status} {file_result['file']}")
+                        if file_result["errors"]:
+                            for error in file_result["errors"]:
+                                print(f"   {c_red('错误')}: {error}")
+                        if file_result["warnings"]:
+                            for warning in file_result["warnings"]:
+                                print(f"   {c_yellow('警告')}: {warning}")
+                    print(f"\n汇总：{c_green(result['summary']['valid'])}/{result['summary']['total']} 通过")
+                else:
+                    status = c_green('✅ 通过') if result["valid"] else c_red('❌ 失败')
+                    print(f"验证结果：{status}")
+                    print(f"文件：{result['file']}")
+                    print(f"Agent: {result.get('agent_id', 'unknown')} - {result.get('agent_name', 'unknown')}")
+                    
+                    if result["errors"]:
+                        print(f"\n{c_red(f'错误 ({len(result['errors'])})')}:")
+                        for error in result["errors"]:
+                            print(f"  - {error}")
+                    
+                    if result["warnings"]:
+                        print(f"\n{c_yellow(f'警告 ({len(result['warnings'])})')}:")
+                        for warning in result["warnings"]:
+                            print(f"  - {warning}")
+            
+            has_errors = False
+            if "files" in result:
+                has_errors = result["summary"]["invalid"] > 0
+            else:
+                has_errors = not result["valid"]
+            
+            if strict:
+                has_warnings = False
+                if "files" in result:
+                    has_warnings = any(len(r.get("warnings", [])) > 0 for r in result["files"])
+                else:
+                    has_warnings = len(result.get("warnings", [])) > 0
+                has_errors = has_errors or has_warnings
+            
+            sys.exit(0 if not has_errors else 1)
+        
+        else:
+            print(c_red('错误：请指定配置文件路径或使用 --all 参数'))
+            print('使用 claw-ex config validate --help 查看帮助')
+            sys.exit(1)
+    
+    except ImportError as e:
+        print(c_red(f'错误：配置验证器导入失败：{e}'))
+        print(f'请确保兵部 workspace 中有 agent_config_validator.py')
+        sys.exit(1)
+    except Exception as e:
+        print(c_red(f'错误：{e}'))
+        sys.exit(1)
+
 # 命令映射
 COMMANDS = {
     'env': {
@@ -315,7 +439,13 @@ COMMANDS = {
     'config': {
         'description': '配置管理',
         'subcommands': {
-            'list': cmd_config_list
+            'list': cmd_config_list,
+            'validate': lambda: cmd_config_validate(
+                path=sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith('-') else None,
+                validate_all='--all' in sys.argv or '-a' in sys.argv,
+                strict='--strict' in sys.argv or '-s' in sys.argv,
+                json_output='--json' in sys.argv or '-j' in sys.argv
+            )
         }
     }
 }
@@ -334,15 +464,23 @@ def show_help():
   {c_yellow('session')}   {COMMANDS['session']['description']}
   {c_yellow('config')}    {COMMANDS['config']['description']}
 
+{c_bold('子命令详情:')}
+  {c_yellow('config validate')} <path|--all> [选项]  验证配置文件
+    {c_gray('-a, --all')}      验证所有 Agent 配置
+    {c_gray('-s, --strict')}   严格模式（警告视为错误）
+    {c_gray('-j, --json')}     JSON 格式输出
+
 {c_bold('全局选项:')}
   {c_cyan('-h, --help')}      显示帮助信息
   {c_cyan('-v, --version')}   显示版本号
   {c_cyan('--no-color')}      禁用颜色输出
 
 {c_bold('示例:')}
-  python3 claw-ex.py env list           # 列出环境变量
-  python3 claw-ex.py task list          # 列出所有任务
-  python3 claw-ex.py --help             # 显示此帮助
+  python3 claw-ex.py env list                    # 列出环境变量
+  python3 claw-ex.py task list                   # 列出所有任务
+  python3 claw-ex.py config validate --all       # 验证所有 Agent 配置
+  python3 claw-ex.py config validate config.json # 验证单个文件
+  python3 claw-ex.py --help                      # 显示此帮助
 
 {c_gray('工部开发 · 尚书省任务管理工具')}
 """)
