@@ -404,6 +404,221 @@ def cmd_config_validate(path=None, validate_all=False, strict=False, json_output
         print(c_red(f'错误：{e}'))
         sys.exit(1)
 
+# ==================== 日志管理命令 ====================
+
+def cmd_logs_tail(follow=False, lines=100, level=None):
+    """查看日志末尾"""
+    import requests
+    import time
+    
+    base_url = os.environ.get('CLAW_EX_API_URL', 'http://localhost:8000')
+    
+    if follow:
+        print(c_cyan(f'\n📜 实时日志跟随 (按 Ctrl+C 退出):\n'))
+        try:
+            last_count = 0
+            while True:
+                resp = requests.get(f'{base_url}/api/logs/tail', params={'lines': 20, 'level': level})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    logs = data.get('logs', [])
+                    if len(logs) > last_count:
+                        for log in logs[last_count:]:
+                            level_color = {
+                                'DEBUG': c_gray,
+                                'INFO': c_cyan,
+                                'WARNING': c_yellow,
+                                'ERROR': c_red
+                            }.get(log.get('level', 'INFO'), lambda x: x)
+                            print(f"{c_gray(log.get('timestamp', '')[:19])} {level_color(f'[{log.get(\"level\", \"INFO\")}]')} {log.get('message', '')}")
+                        last_count = len(logs)
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print('\n退出日志跟随')
+    else:
+        resp = requests.get(f'{base_url}/api/logs/tail', params={'lines': lines, 'level': level})
+        if resp.status_code == 200:
+            data = resp.json()
+            print(c_cyan(f'\n📜 最近 {len(data.get(\"logs\", []))} 条日志:\n'))
+            for log in data.get('logs', []):
+                level_color = {
+                    'DEBUG': c_gray,
+                    'INFO': c_cyan,
+                    'WARNING': c_yellow,
+                    'ERROR': c_red
+                }.get(log.get('level', 'INFO'), lambda x: x)
+                print(f"{c_gray(log.get('timestamp', '')[:19])} {level_color(f'[{log.get(\"level\", \"INFO\")}]')} {log.get('message', '')}")
+        else:
+            print(c_red(f'错误：{resp.status_code} - {resp.text}'))
+
+def cmd_logs_export(output='logs_export.log', level=None, start_time=None, end_time=None):
+    """导出日志"""
+    import requests
+    
+    base_url = os.environ.get('CLAW_EX_API_URL', 'http://localhost:8000')
+    
+    payload = {
+        'output_path': output,
+        'level': level,
+        'start_time': start_time,
+        'end_time': end_time
+    }
+    
+    resp = requests.post(f'{base_url}/api/logs/export', json=payload)
+    if resp.status_code == 200:
+        data = resp.json()
+        print(c_green(f'\n✅ 日志导出成功!\n'))
+        print(f"  文件：{c_cyan(data.get('path', output))}")
+        print(f"  数量：{c_cyan(data.get('count', 0))} 条\n")
+    else:
+        print(c_red(f'错误：{resp.status_code} - {resp.text}'))
+
+def cmd_logs_search(keyword, level=None, source=None, limit=100):
+    """搜索日志"""
+    import requests
+    
+    base_url = os.environ.get('CLAW_EX_API_URL', 'http://localhost:8000')
+    
+    params = {'keyword': keyword, 'limit': limit}
+    if level:
+        params['level'] = level
+    if source:
+        params['source'] = source
+    
+    resp = requests.get(f'{base_url}/api/logs/search', params=params)
+    if resp.status_code == 200:
+        data = resp.json()
+        logs = data.get('logs', [])
+        print(c_cyan(f'\n🔍 搜索结果：找到 {len(logs)} 条匹配日志\n'))
+        for log in logs:
+            level_color = {
+                'DEBUG': c_gray,
+                'INFO': c_cyan,
+                'WARNING': c_yellow,
+                'ERROR': c_red
+            }.get(log.get('level', 'INFO'), lambda x: x)
+            print(f"{c_gray(log.get('timestamp', '')[:19])} {level_color(f'[{log.get(\"level\", \"INFO\")}]')} {log.get('message', '')}")
+    else:
+        print(c_red(f'错误：{resp.status_code} - {resp.text}'))
+
+def cmd_logs_stats():
+    """日志统计"""
+    import requests
+    
+    base_url = os.environ.get('CLAW_EX_API_URL', 'http://localhost:8000')
+    
+    resp = requests.get(f'{base_url}/api/logs/stats')
+    if resp.status_code == 200:
+        data = resp.json()
+        print(c_cyan('\n📊 日志统计:\n'))
+        headers = ['统计项', '数值']
+        rows = [
+            ['总行数', str(data.get('total_lines', 0))],
+            ['文件大小', f"{data.get('file_size', 0) / 1024:.1f} KB"],
+            ['轮转文件', str(data.get('rotated_files', 0))],
+        ]
+        
+        by_level = data.get('by_level', {})
+        for level, count in sorted(by_level.items()):
+            rows.append([f'级别：{level}', str(count)])
+        
+        by_source = data.get('by_source', {})
+        for source, count in sorted(by_source.items()):
+            rows.append([f'来源：{source}', str(count)])
+        
+        print(create_table(headers, rows))
+        print()
+    else:
+        print(c_red(f'错误：{resp.status_code} - {resp.text}'))
+
+# ==================== 批量操作命令 ====================
+
+def cmd_batch_start(pattern, filter_expr=None):
+    """批量启动 Agent"""
+    import requests
+    
+    base_url = os.environ.get('CLAW_EX_API_URL', 'http://localhost:8000')
+    
+    payload = {'pattern': pattern}
+    if filter_expr:
+        payload['filter'] = filter_expr
+    
+    resp = requests.post(f'{base_url}/api/batch/start', json=payload)
+    if resp.status_code == 200:
+        data = resp.json()
+        print(c_green(f'\n✅ 批量启动完成!\n'))
+        print(f"  任务 ID: {c_cyan(data.get('job_id', 'N/A'))}")
+        print(f"  影响数量：{c_cyan(data.get('affected', 0))}")
+        print(f"  消息：{c_cyan(data.get('message', ''))}\n")
+    else:
+        print(c_red(f'错误：{resp.status_code} - {resp.text}'))
+
+def cmd_batch_stop(pattern, ids=None):
+    """批量停止任务"""
+    import requests
+    
+    base_url = os.environ.get('CLAW_EX_API_URL', 'http://localhost:8000')
+    
+    payload = {'pattern': pattern}
+    if ids:
+        payload['ids'] = ids.split(',') if isinstance(ids, str) else ids
+    
+    resp = requests.post(f'{base_url}/api/batch/stop', json=payload)
+    if resp.status_code == 200:
+        data = resp.json()
+        print(c_green(f'\n✅ 批量停止完成!\n'))
+        print(f"  任务 ID: {c_cyan(data.get('job_id', 'N/A'))}")
+        print(f"  影响数量：{c_cyan(data.get('affected', 0))}\n")
+    else:
+        print(c_red(f'错误：{resp.status_code} - {resp.text}'))
+
+def cmd_batch_run(workflow, parallel=False, targets=None):
+    """批量执行工作流"""
+    import requests
+    
+    base_url = os.environ.get('CLAW_EX_API_URL', 'http://localhost:8000')
+    
+    payload = {
+        'workflow': workflow,
+        'parallel': parallel,
+        'targets': targets.split(',') if targets else []
+    }
+    
+    resp = requests.post(f'{base_url}/api/batch/run', json=payload)
+    if resp.status_code == 200:
+        data = resp.json()
+        print(c_green(f'\n✅ 批量执行启动!\n'))
+        print(f"  任务 ID: {c_cyan(data.get('job_id', 'N/A'))}")
+        print(f"  工作流：{c_cyan(workflow)}")
+        print(f"  并行模式：{c_cyan('是' if parallel else '否')}\n")
+    else:
+        print(c_red(f'错误：{resp.status_code} - {resp.text}'))
+
+def cmd_batch_status(job_id):
+    """查看批量任务状态"""
+    import requests
+    
+    base_url = os.environ.get('CLAW_EX_API_URL', 'http://localhost:8000')
+    
+    resp = requests.get(f'{base_url}/api/batch/status/{job_id}')
+    if resp.status_code == 200:
+        data = resp.json()
+        job = data.get('job', {})
+        print(c_cyan(f'\n📋 批量任务状态:\n'))
+        headers = ['属性', '值']
+        rows = [
+            ['任务 ID', job.get('job_id', 'N/A')],
+            ['状态', c_green(job.get('status', 'unknown')) if job.get('status') == 'completed' else c_yellow(job.get('status', 'unknown'))],
+            ['创建时间', job.get('created_at', 'N/A')],
+            ['总数', str(job.get('total', 0))],
+            ['已完成', str(job.get('completed', 0))],
+            ['失败', str(job.get('failed', 0))]
+        ]
+        print(create_table(headers, rows))
+        print()
+    else:
+        print(c_red(f'错误：{resp.status_code} - {resp.text}'))
+
 # 命令映射
 COMMANDS = {
     'env': {
@@ -447,6 +662,44 @@ COMMANDS = {
                 json_output='--json' in sys.argv or '-j' in sys.argv
             )
         }
+    },
+    'logs': {
+        'description': '日志管理',
+        'subcommands': {
+            'tail': lambda: cmd_logs_tail(
+                follow='-f' in sys.argv or '--follow' in sys.argv,
+                lines=int(sys.argv[sys.argv.index('--lines') + 1]) if '--lines' in sys.argv and len(sys.argv) > sys.argv.index('--lines') + 1 else 100,
+                level=sys.argv[sys.argv.index('--level') + 1] if '--level' in sys.argv and len(sys.argv) > sys.argv.index('--level') + 1 else None
+            ),
+            'export': lambda: cmd_logs_export(
+                output=sys.argv[sys.argv.index('--output') + 1] if '--output' in sys.argv and len(sys.argv) > sys.argv.index('--output') + 1 else 'logs_export.log',
+                level=sys.argv[sys.argv.index('--level') + 1] if '--level' in sys.argv and len(sys.argv) > sys.argv.index('--level') + 1 else None
+            ),
+            'search': lambda: cmd_logs_search(
+                keyword=sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith('-') else '',
+                level=sys.argv[sys.argv.index('--level') + 1] if '--level' in sys.argv and len(sys.argv) > sys.argv.index('--level') + 1 else None
+            ),
+            'stats': cmd_logs_stats
+        }
+    },
+    'batch': {
+        'description': '批量操作',
+        'subcommands': {
+            'start': lambda: cmd_batch_start(
+                pattern=sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith('-') else 'agent:*',
+                filter_expr=sys.argv[sys.argv.index('--filter') + 1] if '--filter' in sys.argv and len(sys.argv) > sys.argv.index('--filter') + 1 else None
+            ),
+            'stop': lambda: cmd_batch_stop(
+                pattern=sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith('-') else 'task:*',
+                ids=sys.argv[sys.argv.index('--ids') + 1] if '--ids' in sys.argv and len(sys.argv) > sys.argv.index('--ids') + 1 else None
+            ),
+            'run': lambda: cmd_batch_run(
+                workflow=sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith('-') else 'default',
+                parallel='--parallel' in sys.argv,
+                targets=sys.argv[sys.argv.index('--targets') + 1] if '--targets' in sys.argv and len(sys.argv) > sys.argv.index('--targets') + 1 else None
+            ),
+            'status': lambda: cmd_batch_status(sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith('-') else 'job-unknown')
+        }
     }
 }
 
@@ -463,6 +716,8 @@ def show_help():
   {c_yellow('task')}      {COMMANDS['task']['description']}
   {c_yellow('session')}   {COMMANDS['session']['description']}
   {c_yellow('config')}    {COMMANDS['config']['description']}
+  {c_yellow('logs')}      {COMMANDS['logs']['description']}
+  {c_yellow('batch')}     {COMMANDS['batch']['description']}
 
 {c_bold('子命令详情:')}
   {c_yellow('config validate')} <path|--all> [选项]  验证配置文件
@@ -479,7 +734,11 @@ def show_help():
   python3 claw-ex.py env list                    # 列出环境变量
   python3 claw-ex.py task list                   # 列出所有任务
   python3 claw-ex.py config validate --all       # 验证所有 Agent 配置
-  python3 claw-ex.py config validate config.json # 验证单个文件
+  python3 claw-ex.py logs tail -f --lines 100    # 实时日志跟随
+  python3 claw-ex.py logs search "error" --level ERROR  # 搜索错误日志
+  python3 claw-ex.py logs stats                  # 日志统计
+  python3 claw-ex.py batch start "agent:*" --filter "dept=gongbu"  # 批量启动
+  python3 claw-ex.py batch status job-123        # 查看批量任务状态
   python3 claw-ex.py --help                      # 显示此帮助
 
 {c_gray('工部开发 · 尚书省任务管理工具')}

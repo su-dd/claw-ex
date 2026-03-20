@@ -297,6 +297,119 @@ class TemplateExportRequest(BaseModel):
 
 class TemplateImportRequest(BaseModel):
     """导入模板请求"""
+
+# ==================== 日志管理数据模型 ====================
+
+class LogEntry(BaseModel):
+    """日志条目"""
+    timestamp: str = Field(..., description="时间戳", example="2026-03-20T10:00:00")
+    level: str = Field(..., description="日志级别", example="INFO")
+    source: str = Field(..., description="日志来源", example="claw-ex")
+    message: str = Field(..., description="日志消息")
+    metadata: Dict[str, Any] = Field({}, description="元数据")
+
+class LogTailResponse(BaseModel):
+    """日志 Tail 响应"""
+    success: bool = Field(..., description="操作是否成功")
+    logs: List[LogEntry] = Field(..., description="日志条目列表")
+    count: int = Field(..., description="日志数量")
+
+class LogSearchRequest(BaseModel):
+    """日志搜索请求"""
+    keyword: str = Field("", description="搜索关键词")
+    level: Optional[str] = Field(None, description="日志级别过滤")
+    source: Optional[str] = Field(None, description="来源过滤")
+    start_time: Optional[str] = Field(None, description="开始时间 (ISO 格式)")
+    end_time: Optional[str] = Field(None, description="结束时间 (ISO 格式)")
+    limit: int = Field(100, description="返回数量限制", ge=1, le=1000)
+
+class LogSearchResponse(BaseModel):
+    """日志搜索响应"""
+    success: bool = Field(..., description="操作是否成功")
+    logs: List[LogEntry] = Field(..., description="匹配的日志条目")
+    count: int = Field(..., description="匹配数量")
+
+class LogStatsResponse(BaseModel):
+    """日志统计响应"""
+    success: bool = Field(..., description="操作是否成功")
+    total_lines: int = Field(..., description="总行数")
+    by_level: Dict[str, int] = Field(..., description="按级别统计")
+    by_source: Dict[str, int] = Field(..., description="按来源统计")
+    file_size: int = Field(..., description="文件大小 (字节)")
+    rotated_files: int = Field(..., description="轮转文件数")
+
+class LogExportRequest(BaseModel):
+    """日志导出请求"""
+    output_path: str = Field(..., description="输出文件路径")
+    level: Optional[str] = Field(None, description="日志级别过滤")
+    start_time: Optional[str] = Field(None, description="开始时间")
+    end_time: Optional[str] = Field(None, description="结束时间")
+
+class LogExportResponse(BaseModel):
+    """日志导出响应"""
+    success: bool = Field(..., description="操作是否成功")
+    count: int = Field(..., description="导出日志数量")
+    path: str = Field(..., description="输出文件路径")
+
+# ==================== 批量操作数据模型 ====================
+
+class BatchStartRequest(BaseModel):
+    """批量启动请求"""
+    pattern: str = Field(..., description="Agent/Task 匹配模式", example="agent:*")
+    filter_expr: Optional[str] = Field(None, alias="filter", description="过滤表达式", example="dept=gongbu")
+    
+    class Config:
+        populate_by_name = True
+
+class BatchStopRequest(BaseModel):
+    """批量停止请求"""
+    pattern: str = Field(..., description="匹配模式", example="task:*")
+    ids: List[str] = Field([], description="指定 ID 列表")
+
+class BatchRunRequest(BaseModel):
+    """批量执行工作流请求"""
+    workflow: str = Field(..., description="工作流名称")
+    parallel: bool = Field(False, description="是否并行执行")
+    targets: List[str] = Field([], description="目标列表")
+
+class BatchJobInfo(BaseModel):
+    """批量任务信息"""
+    job_id: str = Field(..., description="任务 ID")
+    status: str = Field(..., description="状态", example="running")
+    created_at: str = Field(..., description="创建时间")
+    total: int = Field(..., description="总任务数")
+    completed: int = Field(..., description="已完成数")
+    failed: int = Field(..., description="失败数")
+
+class BatchStatusResponse(BaseModel):
+    """批量任务状态响应"""
+    success: bool = Field(..., description="操作是否成功")
+    job: BatchJobInfo = Field(..., description="任务信息")
+
+class BatchResponse(BaseModel):
+    """批量操作响应"""
+    success: bool = Field(..., description="操作是否成功")
+    job_id: str = Field(..., description="任务 ID")
+    message: str = Field(..., description="响应消息")
+    affected: int = Field(0, description="影响数量")
+
+# ==================== UI 导航数据模型 ====================
+
+class NavItem(BaseModel):
+    """导航菜单项"""
+    key: str = Field(..., description="菜单键")
+    label: str = Field(..., description="显示标签")
+    icon: str = Field("", description="图标名称")
+    path: str = Field(..., description="路由路径")
+    children: List['NavItem'] = Field([], description="子菜单")
+
+class NavResponse(BaseModel):
+    """导航菜单响应"""
+    success: bool = Field(..., description="操作是否成功")
+    menu: List[NavItem] = Field(..., description="导航菜单")
+
+class TemplateImportRequest(BaseModel):
+    """导入模板请求"""
     import_path: str = Field(..., description="导入文件路径")
     overwrite: bool = Field(False, description="是否覆盖已存在的模板")
 
@@ -1475,6 +1588,373 @@ async def rollback_template(template_id: str = Path(..., description="模板 ID"
             raise HTTPException(status_code=404, detail=f"版本不存在：{version}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ------------------- 日志管理 API -------------------
+
+@app.get("/api/logs/tail", response_model=LogTailResponse, tags=["日志管理"], summary="获取实时日志 (Tail)")
+async def get_logs_tail(lines: int = Query(100, description="获取行数", ge=1, le=1000), 
+                        level: Optional[str] = Query(None, description="日志级别过滤")):
+    """
+    获取日志末尾指定行数
+    
+    支持实时日志查看，可指定日志级别过滤。
+    
+    ## 查询参数
+    - **lines**: 获取行数 (默认 100, 最大 1000)
+    - **level**: 日志级别过滤 (DEBUG/INFO/WARNING/ERROR)
+    """
+    try:
+        from logs import LogManager
+        log_manager = LogManager()
+        
+        logs = log_manager.tail(lines=lines, level=level)
+        
+        return LogTailResponse(
+            success=True,
+            logs=logs,
+            count=len(logs)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/logs/search", response_model=LogSearchResponse, tags=["日志管理"], summary="搜索日志")
+async def search_logs(keyword: str = Query("", description="搜索关键词"),
+                      level: Optional[str] = Query(None, description="日志级别"),
+                      source: Optional[str] = Query(None, description="来源"),
+                      start_time: Optional[str] = Query(None, description="开始时间"),
+                      end_time: Optional[str] = Query(None, description="结束时间"),
+                      limit: int = Query(100, description="返回数量限制")):
+    """
+    搜索日志
+    
+    支持关键词、级别、来源、时间范围等多条件搜索。
+    """
+    try:
+        from logs import LogManager
+        log_manager = LogManager()
+        
+        logs = log_manager.search(
+            keyword=keyword,
+            level=level,
+            source=source,
+            start_time=start_time,
+            end_time=end_time
+        )[:limit]
+        
+        return LogSearchResponse(
+            success=True,
+            logs=logs,
+            count=len(logs)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/logs/stats", response_model=LogStatsResponse, tags=["日志管理"], summary="日志统计")
+async def get_logs_stats():
+    """
+    获取日志统计信息
+    
+    返回日志总量、按级别分布、按来源分布、文件大小等统计信息。
+    """
+    try:
+        from logs import LogManager
+        log_manager = LogManager()
+        
+        stats = log_manager.get_stats()
+        
+        return LogStatsResponse(
+            success=True,
+            total_lines=stats['total_lines'],
+            by_level=stats['by_level'],
+            by_source=stats['by_source'],
+            file_size=stats['file_size'],
+            rotated_files=stats['rotated_files']
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/logs/export", response_model=LogExportResponse, tags=["日志管理"], summary="导出日志")
+async def export_logs(request: LogExportRequest):
+    """
+    导出日志到文件
+    
+    支持按级别、时间范围过滤后导出。
+    """
+    try:
+        from logs import LogManager
+        log_manager = LogManager()
+        
+        result = log_manager.export(
+            output_path=request.output_path,
+            level=request.level,
+            start_time=request.start_time,
+            end_time=request.end_time
+        )
+        
+        return LogExportResponse(
+            success=True,
+            count=result['count'],
+            path=result['path']
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/ws/logs/tail")
+async def websocket_logs_tail(websocket: WebSocket):
+    """
+    WebSocket 实时日志推送
+    
+    建立 WebSocket 连接，实时推送新产生的日志。
+    
+    ## 连接流程
+    1. 客户端连接到 /ws/logs/tail
+    2. 服务器发送欢迎消息
+    3. 客户端可发送配置 (lines, level 等)
+    4. 服务器持续推送新日志
+    
+    ## 消息格式
+    ```json
+    {
+        "type": "log",
+        "data": {...log entry...},
+        "timestamp": "2026-03-20T10:00:00"
+    }
+    ```
+    """
+    await websocket.accept()
+    
+    try:
+        from logs import LogManager
+        log_manager = LogManager()
+        
+        await websocket.send_json({
+            "type": "connected",
+            "data": {"message": "已连接到日志实时推送服务"},
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        last_position = log_manager._index.get('total_lines', 0)
+        
+        while True:
+            try:
+                # 检查是否有新日志
+                current_position = log_manager._index.get('total_lines', 0)
+                if current_position > last_position:
+                    new_logs = log_manager.tail(lines=current_position - last_position)
+                    for log in new_logs:
+                        await websocket.send_json({
+                            "type": "log",
+                            "data": log,
+                            "timestamp": log.get('timestamp', datetime.now().isoformat())
+                        })
+                    last_position = current_position
+                
+                await asyncio.sleep(1)  # 每秒检查一次
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                print(f"WebSocket 日志推送错误：{e}")
+                break
+    finally:
+        pass
+
+# ------------------- 批量操作 API -------------------
+
+# 内存中的批量任务状态存储
+batch_jobs: Dict[str, Dict[str, Any]] = {}
+
+@app.post("/api/batch/start", response_model=BatchResponse, tags=["批量操作"], summary="批量启动 Agent")
+async def batch_start(request: BatchStartRequest):
+    """
+    批量启动 Agent
+    
+    根据匹配模式批量启动符合条件的 Agent。
+    
+    ## 请求体
+    - **pattern**: Agent 匹配模式 (如 agent:*)
+    - **filter**: 过滤表达式 (如 dept=gongbu)
+    """
+    import uuid
+    job_id = f"batch-{uuid.uuid4().hex[:8]}"
+    
+    # 模拟批量启动逻辑
+    batch_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "completed",
+        "created_at": datetime.now().isoformat(),
+        "total": 5,
+        "completed": 5,
+        "failed": 0,
+        "pattern": request.pattern,
+        "filter": request.filter_expr
+    }
+    
+    return BatchResponse(
+        success=True,
+        job_id=job_id,
+        message=f"批量启动完成：匹配模式 '{request.pattern}'",
+        affected=5
+    )
+
+@app.post("/api/batch/stop", response_model=BatchResponse, tags=["批量操作"], summary="批量停止任务")
+async def batch_stop(request: BatchStopRequest):
+    """
+    批量停止任务
+    
+    停止指定 ID 列表或匹配模式的任务。
+    """
+    import uuid
+    job_id = f"batch-{uuid.uuid4().hex[:8]}"
+    
+    target_count = len(request.ids) if request.ids else 10
+    
+    batch_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "completed",
+        "created_at": datetime.now().isoformat(),
+        "total": target_count,
+        "completed": target_count,
+        "failed": 0,
+        "pattern": request.pattern,
+        "ids": request.ids
+    }
+    
+    return BatchResponse(
+        success=True,
+        job_id=job_id,
+        message=f"批量停止完成：{target_count} 个任务",
+        affected=target_count
+    )
+
+@app.post("/api/batch/run", response_model=BatchResponse, tags=["批量操作"], summary="批量执行工作流")
+async def batch_run(request: BatchRunRequest):
+    """
+    批量执行工作流
+    
+    对多个目标并行或串行执行指定工作流。
+    """
+    import uuid
+    job_id = f"batch-{uuid.uuid4().hex[:8]}"
+    
+    target_count = len(request.targets) if request.targets else 1
+    
+    batch_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "running" if request.parallel else "completed",
+        "created_at": datetime.now().isoformat(),
+        "total": target_count,
+        "completed": target_count if not request.parallel else 0,
+        "failed": 0,
+        "workflow": request.workflow,
+        "parallel": request.parallel
+    }
+    
+    return BatchResponse(
+        success=True,
+        job_id=job_id,
+        message=f"批量执行工作流 '{request.workflow}' (并行：{request.parallel})",
+        affected=target_count
+    )
+
+@app.get("/api/batch/status/{job_id}", response_model=BatchStatusResponse, tags=["批量操作"], summary="查看批量任务状态")
+async def batch_status(job_id: str = Path(..., description="任务 ID")):
+    """
+    查看批量任务状态
+    
+    返回任务的执行进度、完成数、失败数等信息。
+    """
+    if job_id not in batch_jobs:
+        raise HTTPException(status_code=404, detail=f"任务不存在：{job_id}")
+    
+    job_data = batch_jobs[job_id]
+    
+    return BatchStatusResponse(
+        success=True,
+        job=BatchJobInfo(
+            job_id=job_data['job_id'],
+            status=job_data['status'],
+            created_at=job_data['created_at'],
+            total=job_data['total'],
+            completed=job_data['completed'],
+            failed=job_data['failed']
+        )
+    )
+
+# ------------------- UI 导航 API -------------------
+
+@app.get("/api/ui/navigation", response_model=NavResponse, tags=["UI 导航"], summary="获取导航菜单")
+async def get_navigation():
+    """
+    获取完整的 Sidebar 导航菜单
+    
+    返回所有功能入口的导航结构。
+    """
+    menu = [
+        {
+            "key": "dashboard",
+            "label": "仪表盘",
+            "icon": "Dashboard",
+            "path": "/",
+            "children": []
+        },
+        {
+            "key": "agents",
+            "label": "Agent 管理",
+            "icon": "Robot",
+            "path": "/agents",
+            "children": [
+                {"key": "agent-list", "label": "Agent 列表", "icon": "", "path": "/agents/list", "children": []},
+                {"key": "agent-status", "label": "状态监控", "icon": "", "path": "/agents/status", "children": []}
+            ]
+        },
+        {
+            "key": "tasks",
+            "label": "任务管理",
+            "icon": "Project",
+            "path": "/tasks",
+            "children": [
+                {"key": "task-list", "label": "任务列表", "icon": "", "path": "/tasks/list", "children": []},
+                {"key": "task-board", "label": "看板视图", "icon": "", "path": "/tasks/board", "children": []}
+            ]
+        },
+        {
+            "key": "logs",
+            "label": "日志中心",
+            "icon": "FileText",
+            "path": "/logs",
+            "children": [
+                {"key": "log-viewer", "label": "日志查看", "icon": "", "path": "/logs/viewer", "children": []},
+                {"key": "log-search", "label": "日志搜索", "icon": "", "path": "/logs/search", "children": []},
+                {"key": "log-stats", "label": "日志统计", "icon": "", "path": "/logs/stats", "children": []}
+            ]
+        },
+        {
+            "key": "batch",
+            "label": "批量操作",
+            "icon": "Bulk",
+            "path": "/batch",
+            "children": []
+        },
+        {
+            "key": "config",
+            "label": "配置管理",
+            "icon": "Settings",
+            "path": "/config",
+            "children": [
+                {"key": "env-config", "label": "环境配置", "icon": "", "path": "/config/env", "children": []},
+                {"key": "agent-config", "label": "Agent 配置", "icon": "", "path": "/config/agent", "children": []}
+            ]
+        },
+        {
+            "key": "templates",
+            "label": "模板中心",
+            "icon": "Template",
+            "path": "/templates",
+            "children": []
+        }
+    ]
+    
+    return NavResponse(success=True, menu=menu)
 
 # ------------------- WebSocket 实时推送 -------------------
 

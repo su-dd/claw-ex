@@ -12,6 +12,8 @@ import {
   EnvironmentOutlined,
   FileTextOutlined,
   TemplateOutlined,
+  FileSearchOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import EnvManager from './pages/EnvManager';
 import AgentConfig from './pages/AgentConfig';
@@ -21,6 +23,9 @@ import TemplateList from './pages/TemplateList';
 import TemplateDetail from './pages/TemplateDetail';
 import TemplateForm from './pages/TemplateForm';
 import TemplateApply from './pages/TemplateApply';
+import LogViewer from './pages/LogViewer';
+import LogSearch from './pages/LogSearch';
+import BatchOperations from './pages/BatchOperations';
 import NotFound from './pages/NotFound';
 import Forbidden from './pages/Forbidden';
 import RouteGuard from './components/RouteGuard';
@@ -63,6 +68,22 @@ const MainLayout = ({ children, selectedKey }) => {
       path: '/task',
     },
     {
+      key: 'logs',
+      icon: <FileSearchOutlined />,
+      label: '日志中心',
+      path: '/logs',
+      children: [
+        { key: 'log-viewer', label: '日志查看', path: '/logs/viewer' },
+        { key: 'log-search', label: '日志搜索', path: '/logs/search' },
+      ],
+    },
+    {
+      key: 'batch',
+      icon: <ThunderboltOutlined />,
+      label: '批量操作',
+      path: '/batch',
+    },
+    {
       key: 'templates',
       icon: <TemplateOutlined />,
       label: '模板管理',
@@ -74,6 +95,8 @@ const MainLayout = ({ children, selectedKey }) => {
   const getSelectedKey = () => {
     const path = location.pathname;
     if (path.startsWith('/templates')) return 'templates';
+    if (path.startsWith('/logs')) return 'logs';
+    if (path.startsWith('/batch')) return 'batch';
     if (path.startsWith('/env')) return 'env';
     if (path.startsWith('/agent')) return 'agent';
     if (path.startsWith('/task')) return 'task';
@@ -150,6 +173,22 @@ const App = () => {
         <Route
           path="/task"
           element={<LayoutRoute selectedKey="task"><TaskManager /></LayoutRoute>}
+        />
+
+        {/* 日志中心路由组 */}
+        <Route
+          path="/logs/viewer"
+          element={<LayoutRoute selectedKey="logs"><LogViewer /></LayoutRoute>}
+        />
+        <Route
+          path="/logs/search"
+          element={<LayoutRoute selectedKey="logs"><LogSearch /></LayoutRoute>}
+        />
+
+        {/* 批量操作路由 */}
+        <Route
+          path="/batch"
+          element={<LayoutRoute selectedKey="batch"><BatchOperations /></LayoutRoute>}
         />
 
         {/* 模板管理路由组 */}
