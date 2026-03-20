@@ -11,6 +11,13 @@ import os
 import json
 from datetime import datetime
 
+# 自动添加 src 目录到 Python 路径
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+SRC_DIR = os.path.join(PROJECT_ROOT, 'src')
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
 # 颜色支持
 class Colors:
     RESET = '\033[0m'
